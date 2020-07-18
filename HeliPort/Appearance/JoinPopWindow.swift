@@ -87,9 +87,9 @@ final class JoinPopWindow: NSWindow, NSTextFieldDelegate {
             height: 32
         ))
         ssidLabel = NSTextField(frame: NSRect(
-            x: 70,
+            x: 50,
             y: 132,
-            width: 100,
+            width: 120,
             height: 19
         ))
         ssidBox = NSTextField(frame: NSRect(
@@ -99,9 +99,9 @@ final class JoinPopWindow: NSWindow, NSTextFieldDelegate {
             height: 21
         ))
         securityLabel = NSTextField(frame: NSRect(
-            x: 100,
+            x: 50,
             y: 103,
-            width: 70,
+            width: 120,
             height: 19
         ))
         securityPop = NSPopUpButton(frame: NSRect(
@@ -111,9 +111,9 @@ final class JoinPopWindow: NSWindow, NSTextFieldDelegate {
             height: 26
         ))
         usernameLabel = NSTextField(frame: NSRect(
-            x: 100,
+            x: 50,
             y: 150,
-            width: 70,
+            width: 120,
             height: 19
         ))
         usernameBox = NSTextField(frame: NSRect(
@@ -225,11 +225,11 @@ final class JoinPopWindow: NSWindow, NSTextFieldDelegate {
         //securityPop?.addItem(withTitle: NSLocalizedString("WPA2/WPA3 Personal", comment: ""))
         securityPop.addItem(withTitle: NSLocalizedString("WPA2 Personal", comment: ""))
         //securityPop?.addItem(withTitle: NSLocalizedString("WPA3 Personal", comment: ""))
-        securityPop.menu?.addItem(.separator())
+        //securityPop.menu?.addItem(.separator())
         //securityPop?.addItem(withTitle: NSLocalizedString("Dynamic WEP", comment: ""))
-        securityPop.addItem(withTitle: NSLocalizedString("WPA/WPA2 Enterprise", comment: ""))
+        //securityPop.addItem(withTitle: NSLocalizedString("WPA/WPA2 Enterprise", comment: ""))
         //securityPop?.addItem(withTitle: NSLocalizedString("WPA2/WPA3 Enterprise", comment: ""))
-        securityPop.addItem(withTitle: NSLocalizedString("WPA2 Enterprise", comment: ""))
+        //securityPop.addItem(withTitle: NSLocalizedString("WPA2 Enterprise", comment: ""))
         //securityPop?.addItem(withTitle: NSLocalizedString("WPA3 Enterprise", comment: ""))
         securityPop.target = self
         securityPop.action = #selector(security(_:))
@@ -448,7 +448,7 @@ final class JoinPopWindow: NSWindow, NSTextFieldDelegate {
         default:
             let alert = NSAlert()
             alert.messageText = NSLocalizedString("Encryption type unsupported", comment: "")
-            alert.alertStyle = NSAlert.Style.critical
+            alert.alertStyle = .critical
             alert.runModal()
             controlJoinButton()
             return
@@ -483,10 +483,28 @@ final class JoinPopWindow: NSWindow, NSTextFieldDelegate {
     }
 
     @objc private func joinWiFi(_ sender: Any?) {
-        associate_ssid(
-            ssidBox.stringValue,
-            passwdInputBox.stringValue
-        )
+        let networkInfo = NetworkInfo(ssid: ssidBox.stringValue)
+        networkInfo.auth.password = passwdInputBox.stringValue
+
+        switch securityPop.indexOfSelectedItem {
+        case 0:
+            networkInfo.auth.security = ITL80211_SECURITY_NONE
+
+        case 2:
+            networkInfo.auth.security = ITL80211_SECURITY_WPA_PERSONAL_MIXED
+        case 3:
+            networkInfo.auth.security = ITL80211_SECURITY_WPA2_PERSONAL
+
+        case 5:
+            networkInfo.auth.security = ITL80211_SECURITY_WPA_ENTERPRISE_MIXED
+        case 6:
+            networkInfo.auth.security = ITL80211_SECURITY_WPA2_ENTERPRISE
+
+        default:
+            networkInfo.auth.security = ITL80211_SECURITY_UNKNOWN
+        }
+
+        NetworkManager.connect(networkInfo: networkInfo, saveNetwork: isSave.state == .on)
         close()
     }
 

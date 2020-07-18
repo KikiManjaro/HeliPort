@@ -32,7 +32,11 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
 
     private var status: itl_80211_state = ITL80211_S_INIT {
         didSet {
-            guard isNetworkCardEnabled else {
+            /* Only allow if network card is enabled or if the network card does not load
+             either due to itlwm not loaded or just not able to receive info
+             This prevents cards that are working but are "off" to not change the
+             Status from "WiFi off" to another status. i.e "WiFi: on". */
+            guard isNetworkCardEnabled || !isNetworkCardAvailable else {
                 return
             }
 
@@ -45,9 +49,14 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
                 StatusBarIcon.connecting()
             case ITL80211_S_RUN:
                 DispatchQueue.global(qos: .background).async {
+                    let isReachable = NetworkManager.isReachable()
                     var staInfo = station_info_t()
                     get_station_info(&staInfo)
                     DispatchQueue.main.async {
+                        guard isReachable else {
+                            StatusBarIcon.warning()
+                            return
+                        }
                         StatusBarIcon.signalStrength(RSSI: staInfo.rssi)
                     }
                 }
@@ -55,7 +64,7 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
                 // no change in status bar icon when scanning
                 break
             default:
-                StatusBarIcon.off()
+                StatusBarIcon.error()
             }
         }
     }
@@ -72,18 +81,48 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
     private var showAllOptions: Bool = false {
         willSet(visible) {
             for idx in 0...6 {
+                /*
+                 * Hide top items if the Options button is not pressed.
+                 * TODO: idx 3, 4, 5 have not been implemented
+                 * 3: Enable Wi-Fi Logging
+                 * 4: Create Diagnostics Report...
+                 * 5: Open Wi-Fi Diagnostics...
+                 */
+                if idx == 3 || idx == 4 || idx == 5 {
+                    items[idx].isHidden = true
+                    continue
+                }
                 items[idx].isHidden = !visible
             }
-            for idx in 1...2 {
-                items[items.count - idx].isHidden = !visible
-            }
+
             for idx in 11...24 {
-                // TODO: security, country code, and NSS are hidden since those have not been implemented in io_station_info
+                /*
+                 * Hide items for which when there is no Wi-Fi connection and
+                 * Options button is not pressed.
+                 * idx 15, 18, 24 have not been implemented in io_station_info
+                 * 15: security
+                 * 18: country code
+                 * 24: NSS
+                 */
                 if idx == 15 || idx == 18 || idx == 24 {
                     items[idx].isHidden = true
                     continue
                 }
                 items[idx].isHidden = !(visible && status == ITL80211_S_RUN)
+            }
+
+            // Create Network... has not been implemented in itlwm
+            items[items.count - 8].isHidden = true
+
+            /*
+             * Hide bottom items if the Options button is not pressed:
+             * item.count - 1: Quit HeliPort
+             * item.count - 2: NSMenuItem.separator()
+             * item.count - 3: Check for Updates
+             * item.count - 4: Launch at Login
+             */
+            for idx in 1...4 {
+                items[items.count - idx].isHidden = !visible
             }
         }
     }
@@ -103,6 +142,30 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
         }
     }
 
+    private var isNetworkCardAvailable: Bool = true {
+        willSet(newState) {
+            if !newState {
+                self.isNetworkCardEnabled = false
+            }
+
+            for inx in 6...9 {
+                // TODO: Create Network... has not been implemented in itlwm
+                if inx == 8 {
+                    continue
+                }
+
+                /*
+                 * Hide items that cannot be used while card is not working
+                 * items.count - 6: Open Network Preferences...
+                 * items.count - 7: Create Network...
+                 * items.count - 8: Join Other Network...
+                 * items.count - 9: networkItemListSeparator
+                 */
+                items[items.count - inx].isHidden = !newState
+            }
+        }
+    }
+
     private var isNetworkCardEnabled: Bool = false {
         willSet(newState) {
             statusItem.title = NSLocalizedString(newState ? "Wi-Fi: On" : "Wi-Fi: Off", comment: "")
@@ -111,6 +174,12 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
                 newState ? StatusBarIcon.on() : StatusBarIcon.off()
                 self.isNetworkListEmpty = true
             }
+        }
+    }
+
+    private var isAutoLaunch: Bool = false {
+        willSet(newState) {
+            toggleLaunchItem.state = newState ? .on : .off
         }
     }
 
@@ -124,6 +193,11 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
     private let bsdItem = NSMenuItem(title: NSLocalizedString("Interface Name: ", comment: "") + "(null)")
     private let macItem = NSMenuItem(title: NSLocalizedString("Address: ", comment: "") + "(null)")
     private let itlwmVerItem = NSMenuItem(title: NSLocalizedString("Version: ", comment: "") + "(null)")
+
+    private let toggleLaunchItem = NSMenuItem(
+        title: NSLocalizedString("Launch At Login", comment: ""),
+        action: #selector(clickMenuItem(_:))
+    )
 
     // MARK: - WiFi connected items
 
@@ -162,6 +236,8 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
                     self.updateNetworkList()
                 }
             }
+
+            self.isAutoLaunch = LoginItemManager.isEnabled()
 
             self.statusUpdateTimer = Timer.scheduledTimer(
                 timeInterval: self.statusUpdatePeriod,
@@ -229,8 +305,13 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
         addItem(NSMenuItem.separator())
 
         addClickItem(title: NSLocalizedString("About HeliPort", comment: ""))
+        addItem(toggleLaunchItem)
+        toggleLaunchItem.target = self
         addClickItem(title: NSLocalizedString("Check for Updates...", comment: ""))
-        addClickItem(title: NSLocalizedString("Quit HeliPort", comment: ""), keyEquivalent: "Q")
+
+        addItem(NSMenuItem.separator())
+
+        addClickItem(title: NSLocalizedString("Quit HeliPort", comment: ""), keyEquivalent: "q")
     }
 
     // - MARK: Overrides
@@ -300,6 +381,14 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
                 self.macItem.title = NSLocalizedString("Address: ", comment: "") + macAddr
                 self.itlwmVerItem.title = NSLocalizedString("Version: ", comment: "") + itlwmVer
             }
+
+            // If not connected, try to connect saved networks
+            var stationInfo = station_info_t()
+            var state: UInt32 = 0
+            if get_80211_state(&state) &&
+                (state != ITL80211_S_RUN.rawValue || get_station_info(&stationInfo) != KERN_SUCCESS) {
+                NetworkManager.connectSavedNetworks()
+            }
         }
     }
 
@@ -346,12 +435,15 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
         case NSLocalizedString("Create Network...", comment: ""):
             let alert = NSAlert()
             alert.messageText = NSLocalizedString("FUNCTION NOT IMPLEMENTED", comment: "")
-            alert.alertStyle = NSAlert.Style.critical
+            alert.alertStyle = .critical
             alert.runModal()
         case NSLocalizedString("Open Network Preferences...", comment: ""):
             NSWorkspace.shared.openFile("/System/Library/PreferencePanes/Network.prefPane")
         case NSLocalizedString("Check for Updates...", comment: ""):
             heliPortUpdater.checkForUpdates(self)
+        case NSLocalizedString("Launch At Login", comment: ""):
+            LoginItemManager.setStatus(enabled: LoginItemManager.isEnabled() ? false : true)
+            isAutoLaunch = LoginItemManager.isEnabled()
         case NSLocalizedString("About HeliPort", comment: ""):
             NSApplication.shared.orderFrontStandardAboutPanel()
             NSApplication.shared.activate(ignoringOtherApps: true)
@@ -373,6 +465,7 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
                 if get_power_ret {
                     self.isNetworkCardEnabled = powerState
                 }
+                self.isNetworkCardAvailable = get_power_ret
                 self.status = itl_80211_state(rawValue: status)
             }
         }
@@ -407,7 +500,7 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
                                           range: nil)
                 let ipAddress = NetworkManager.getLocalAddress(bsd: bsd)
                 let routerAddress = NetworkManager.getRouterAddress(bsd: bsd)
-                let isReachable = NetworkManager.checkConnectionReachability(station: staInfo)
+                let isReachable = NetworkManager.isReachable()
                 disconnectName = String(cString: &staInfo.ssid.0)
                 ipAddr = ipAddress ?? NSLocalizedString("Unknown", comment: "")
                 routerAddr = routerAddress ?? NSLocalizedString("Unknown", comment: "")
@@ -479,7 +572,11 @@ final class StatusMenu: NSMenu, NSMenuDelegate {
                                   options: .regularExpression,
                                   range: nil
         )
-        dis_associate_ssid(ssid)
-        print("disconnected from \(ssid)")
+        
+        DispatchQueue.global().async {
+            CredentialsManager.instance.setAutoJoin(ssid, false)
+            dis_associate_ssid(ssid)
+            print("disconnected from \(ssid)")
+        }
     }
 }
